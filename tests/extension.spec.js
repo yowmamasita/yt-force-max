@@ -41,6 +41,7 @@ function parseNetscapeCookies(filePath) {
  * Launch Chrome with the extension loaded
  */
 async function launchWithExtension(options = {}) {
+  const isCI = !!process.env.CI;
   const context = await chromium.launchPersistentContext('', {
     headless: false,
     args: [
@@ -48,6 +49,7 @@ async function launchWithExtension(options = {}) {
       `--load-extension=${EXTENSION_PATH}`,
       '--no-first-run',
       '--disable-gpu',
+      ...(isCI ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-setuid-sandbox'] : []),
     ],
     viewport: { width: 1920, height: 1080 },
     ...options,
@@ -139,11 +141,13 @@ async function getVideoStats(page) {
  */
 async function dismissConsent(page) {
   try {
+    // YouTube consent dialog selectors vary by region
     const acceptBtn = page.locator(
-      'button[aria-label="Accept all"], button[aria-label="Accept the use of cookies and other data for the purposes described"]'
+      'button[aria-label="Accept all"], button[aria-label="Accept the use of cookies and other data for the purposes described"], tp-yt-paper-button.ytd-consent-bump-v2-lightbox:has-text("Accept all"), form[action*="consent"] button:has-text("Accept"), button:has-text("Reject all")'
     );
-    if (await acceptBtn.isVisible({ timeout: 3000 })) {
-      await acceptBtn.click();
+    if (await acceptBtn.first().isVisible({ timeout: 5000 })) {
+      await acceptBtn.first().click();
+      await page.waitForTimeout(1000);
     }
   } catch {
     // No consent dialog
