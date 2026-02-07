@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Force Max Quality + Theatre Mode
 // @namespace    https://github.com/yowmamasita
-// @version      1.2
-// @description  Forces preferred quality and theatre mode on every YouTube video
+// @version      1.3
+// @description  Forces preferred quality (including Premium enhanced bitrate) and theatre mode on every YouTube video
 // @match        *://www.youtube.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -13,19 +13,12 @@
 (function () {
   'use strict';
 
-  // ── Configuration ────────────────────────────────────────────────
-  // Quality options (highest to lowest):
-  //   "max"     - always pick the highest available
-  //   "hd2160"  - 4K
-  //   "hd1440"  - 1440p
-  //   "hd1080"  - 1080p
-  //   "hd720"   - 720p
-  //   "large"   - 480p
-  //   "medium"  - 360p
-  //   "small"   - 240p
-  //   "tiny"    - 144p
+  // ── Quality definitions ──────────────────────────────────────────
+  // YouTube quality keys from highest to lowest.
+  // "max" selects the best available, including Premium enhanced
+  // bitrate variants when available (YouTube Premium required).
   const QUALITY_LABELS = {
-    max: 'Max (highest available)',
+    max: 'Max (highest available, prefers Premium enhanced bitrate)',
     hd2160: '2160p (4K)',
     hd1440: '1440p',
     hd1080: '1080p',
@@ -75,14 +68,24 @@
     const preferred = getConfig().quality;
     if (preferred === 'max') return availableLevels[0];
 
-    // Find the preferred level, or the closest available one that's <= preferred
     const prefIndex = QUALITY_KEYS.indexOf(preferred);
     for (let i = prefIndex; i < QUALITY_KEYS.length; i++) {
       const level = QUALITY_KEYS[i];
       if (level !== 'max' && availableLevels.includes(level)) return level;
     }
-    // Fallback: pick the lowest available
     return availableLevels[availableLevels.length - 2]; // skip 'auto'
+  }
+
+  function getPremiumFormatId(player, quality) {
+    if (!player.getAvailableQualityData) return undefined;
+    const qualityData = player.getAvailableQualityData();
+    // For "max", pick the first entry (highest); otherwise match the quality key.
+    // Prefer Premium (enhanced bitrate) variants when multiple entries share
+    // the same quality key.
+    const matches = qualityData.filter((q) => q.quality === quality);
+    const premium = matches.find((q) => q.paygatedQualityDetails);
+    if (premium) return premium.formatId;
+    return matches[0]?.formatId;
   }
 
   function forceQuality() {
@@ -97,17 +100,31 @@
 
     if (!current || current === 'unknown') return false;
 
+    const formatId = getPremiumFormatId(player, target);
+
     if (player.setPlaybackQualityRange) {
-      player.setPlaybackQualityRange(target, target);
+      if (formatId) {
+        player.setPlaybackQualityRange(target, target, formatId);
+      } else {
+        player.setPlaybackQualityRange(target, target);
+      }
     }
     if (player.setPlaybackQuality) {
       player.setPlaybackQuality(target);
+    }
+
+    // For Premium formats, we can't check by quality string alone since
+    // both regular and Premium report the same quality key. Use stats
+    // to verify when a formatId was requested.
+    if (formatId && player.getVideoStats) {
+      const stats = player.getVideoStats();
+      return stats.fmt === formatId;
     }
     return current === target;
   }
 
   function forceTheatreMode() {
-    if (!getConfig().theatre) return true; // skip if disabled
+    if (!getConfig().theatre) return true;
 
     const page = document.querySelector('ytd-watch-flexy');
     if (!page) return false;
