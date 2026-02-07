@@ -226,9 +226,14 @@ test.describe('YouTube Force Max Quality Extension', () => {
   test('forces max quality on 4K video', async () => {
     const page = await context.newPage();
 
-    await page.goto(VIDEO_4K, { waitUntil: 'domcontentloaded' });
+    await page.goto(VIDEO_4K, { waitUntil: 'load', timeout: 30_000 });
+    await saveScreenshot(page, '01-after-load');
+    console.log(`Page URL: ${page.url()}`);
+    console.log(`Page title: ${await page.title()}`);
     await dismissConsent(page);
-    await saveScreenshot(page, 'after-goto-4k');
+    await page.waitForTimeout(5000);
+    await saveScreenshot(page, '02-after-5s-wait');
+    console.log(`Page URL after wait: ${page.url()}`);
     await waitForPlayer(page);
 
     // Wait for extension to apply quality (retry loop)
