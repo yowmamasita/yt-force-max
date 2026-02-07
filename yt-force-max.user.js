@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Force Max Quality + Theatre Mode
 // @namespace    https://github.com/yowmamasita
-// @version      1.3
+// @version      2.0
 // @description  Forces preferred quality (including Premium enhanced bitrate) and theatre mode on every YouTube video
 // @match        *://www.youtube.com/*
 // @run-at       document-idle
@@ -13,12 +13,100 @@
 (function () {
   'use strict';
 
+  // ── YouTube itag format database ─────────────────────────────────
+  // Reverse-engineered format map. Premium itags (356, 721) require
+  // YouTube Premium. Itags 214, 216, 598, 599, 600 are Android-only.
+  // Itags 141, 774 are YouTube Music Premium-only.
+  const ITAG_DB = {
+    // H.264 (avc1)
+    18:  { codec: 'H.264', type: 'mux', res: '360p', fps: 30 },
+    133: { codec: 'H.264', type: 'video', res: '240p', fps: 30 },
+    134: { codec: 'H.264', type: 'video', res: '360p', fps: 30 },
+    135: { codec: 'H.264', type: 'video', res: '480p', fps: 30 },
+    136: { codec: 'H.264', type: 'video', res: '720p', fps: 30 },
+    137: { codec: 'H.264', type: 'video', res: '1080p', fps: 30 },
+    160: { codec: 'H.264', type: 'video', res: '144p', fps: 30 },
+    214: { codec: 'H.264', type: 'video', res: '720p', fps: 1, note: 'storyboard (Android)' },
+    216: { codec: 'H.264', type: 'video', res: '1080p', fps: 1, note: 'storyboard (Android)' },
+    298: { codec: 'H.264', type: 'video', res: '720p', fps: 60 },
+    299: { codec: 'H.264', type: 'video', res: '1080p', fps: 60 },
+    // VP9
+    278: { codec: 'VP9', type: 'video', res: '144p', fps: 30 },
+    242: { codec: 'VP9', type: 'video', res: '240p', fps: 30 },
+    243: { codec: 'VP9', type: 'video', res: '360p', fps: 30 },
+    244: { codec: 'VP9', type: 'video', res: '480p', fps: 30 },
+    247: { codec: 'VP9', type: 'video', res: '720p', fps: 30 },
+    248: { codec: 'VP9', type: 'video', res: '1080p', fps: 30 },
+    271: { codec: 'VP9', type: 'video', res: '1440p', fps: 30 },
+    313: { codec: 'VP9', type: 'video', res: '2160p', fps: 30 },
+    302: { codec: 'VP9', type: 'video', res: '720p', fps: 60 },
+    303: { codec: 'VP9', type: 'video', res: '1080p', fps: 60 },
+    308: { codec: 'VP9', type: 'video', res: '1440p', fps: 60 },
+    315: { codec: 'VP9', type: 'video', res: '2160p', fps: 60 },
+    598: { codec: 'VP9', type: 'video', res: '144p', fps: 12, note: 'preview (Android)' },
+    // VP9.2 HDR (itags 330-337, sequential 144p-2160p @ 60fps)
+    330: { codec: 'VP9.2', type: 'video', res: '144p', fps: 60, hdr: true },
+    331: { codec: 'VP9.2', type: 'video', res: '240p', fps: 60, hdr: true },
+    332: { codec: 'VP9.2', type: 'video', res: '360p', fps: 60, hdr: true },
+    333: { codec: 'VP9.2', type: 'video', res: '480p', fps: 60, hdr: true },
+    334: { codec: 'VP9.2', type: 'video', res: '720p', fps: 60, hdr: true },
+    335: { codec: 'VP9.2', type: 'video', res: '1080p', fps: 60, hdr: true },
+    336: { codec: 'VP9.2', type: 'video', res: '1440p', fps: 60, hdr: true },
+    337: { codec: 'VP9.2', type: 'video', res: '2160p', fps: 60, hdr: true },
+    // Premium VP9 enhanced bitrate
+    356: { codec: 'VP9', type: 'video', res: '1080p', fps: 30, premium: true },
+    // AV1 SDR (itags 394-401, sequential 144p-2160p)
+    394: { codec: 'AV1', type: 'video', res: '144p', fps: 30 },
+    395: { codec: 'AV1', type: 'video', res: '240p', fps: 30 },
+    396: { codec: 'AV1', type: 'video', res: '360p', fps: 30 },
+    397: { codec: 'AV1', type: 'video', res: '480p', fps: 30 },
+    398: { codec: 'AV1', type: 'video', res: '720p', fps: 30 },
+    399: { codec: 'AV1', type: 'video', res: '1080p', fps: 30 },
+    400: { codec: 'AV1', type: 'video', res: '1440p', fps: 30 },
+    401: { codec: 'AV1', type: 'video', res: '2160p', fps: 30 },
+    402: { codec: 'AV1', type: 'video', res: '4320p', fps: 30, note: 'rare' },
+    // AV1 HFR 60fps
+    571: { codec: 'AV1', type: 'video', res: '4320p', fps: 60, note: 'ultra-high bitrate' },
+    // AV1 HDR (itags 694-702, sequential 144p-4320p @ 60fps = SDR + 300)
+    694: { codec: 'AV1', type: 'video', res: '144p', fps: 60, hdr: true },
+    695: { codec: 'AV1', type: 'video', res: '240p', fps: 60, hdr: true },
+    696: { codec: 'AV1', type: 'video', res: '360p', fps: 60, hdr: true },
+    697: { codec: 'AV1', type: 'video', res: '480p', fps: 60, hdr: true },
+    698: { codec: 'AV1', type: 'video', res: '720p', fps: 60, hdr: true },
+    699: { codec: 'AV1', type: 'video', res: '1080p', fps: 60, hdr: true },
+    700: { codec: 'AV1', type: 'video', res: '1440p', fps: 60, hdr: true },
+    701: { codec: 'AV1', type: 'video', res: '2160p', fps: 60, hdr: true },
+    702: { codec: 'AV1', type: 'video', res: '4320p', fps: 60, hdr: true },
+    // Premium AV1 enhanced bitrate
+    712: { codec: 'AV1', type: 'video', res: '1080p', fps: 60, premium: true, note: 'HFR Premium' },
+    721: { codec: 'AV1', type: 'video', res: '1080p', fps: 30, premium: true },
+    // Letterboxed (Dolby Vision content)
+    779: { codec: 'VP9', type: 'video', res: '480p', fps: 24, note: 'letterboxed 1080x608' },
+    780: { codec: 'VP9', type: 'video', res: '480p', fps: 24, note: 'letterboxed 1080x608' },
+    788: { codec: 'AV1', type: 'video', res: '480p', fps: 24, note: 'letterboxed 1080x608' },
+    // Audio — AAC
+    139: { codec: 'HE-AAC', type: 'audio', bitrate: 48, note: 'Android low-q' },
+    140: { codec: 'AAC', type: 'audio', bitrate: 128 },
+    141: { codec: 'AAC', type: 'audio', bitrate: 256, premium: true, note: 'YT Music only' },
+    // Audio — Opus
+    249: { codec: 'Opus', type: 'audio', bitrate: 50 },
+    250: { codec: 'Opus', type: 'audio', bitrate: 70 },
+    251: { codec: 'Opus', type: 'audio', bitrate: 160 },
+    599: { codec: 'HE-AAC', type: 'audio', bitrate: 30, note: 'Android ultralow' },
+    600: { codec: 'Opus', type: 'audio', bitrate: 30, note: 'Android ultralow' },
+    774: { codec: 'Opus', type: 'audio', bitrate: 256, premium: true, note: 'YT Music only' },
+    // Audio — Surround
+    256: { codec: 'HE-AAC', type: 'audio', bitrate: 192, note: '5.1 surround' },
+    258: { codec: 'AAC', type: 'audio', bitrate: 384, note: '5.1 surround' },
+    328: { codec: 'EC-3', type: 'audio', bitrate: 384, note: 'Dolby Digital+ 5.1' },
+    380: { codec: 'AC-3', type: 'audio', bitrate: 384, note: 'Dolby Digital 5.1' },
+    // HLS Premium
+    616: { codec: 'VP9', type: 'video', res: '1080p', premium: true, note: 'HLS/M3U8 delivery' },
+  };
+
   // ── Quality definitions ──────────────────────────────────────────
-  // YouTube quality keys from highest to lowest.
-  // "max" selects the best available, including Premium enhanced
-  // bitrate variants when available (YouTube Premium required).
   const QUALITY_LABELS = {
-    max: 'Max (highest available, prefers Premium enhanced bitrate)',
+    max: 'Max (highest available)',
     hd2160: '2160p (4K)',
     hd1440: '1440p',
     hd1080: '1080p',
@@ -34,6 +122,7 @@
     return {
       quality: GM_getValue('quality', 'max'),
       theatre: GM_getValue('theatre', true),
+      preferPremium: GM_getValue('preferPremium', true),
     };
   }
 
@@ -61,6 +150,77 @@
     alert(`Theatre mode: ${!current ? 'ON' : 'OFF'}`);
   });
 
+  GM_registerMenuCommand('Toggle Premium enhanced bitrate', () => {
+    const current = GM_getValue('preferPremium', true);
+    GM_setValue('preferPremium', !current);
+    alert(
+      `Premium enhanced bitrate: ${!current ? 'ON' : 'OFF'}\n\n` +
+      (!current
+        ? 'Will prefer Premium enhanced bitrate (itag 356/721) when available.\nRequires YouTube Premium.'
+        : 'Will use standard bitrate even when Premium is available.')
+    );
+  });
+
+  GM_registerMenuCommand('Show current playback info', () => {
+    const player = document.getElementById('movie_player');
+    if (!player) { alert('No player found.'); return; }
+
+    const stats = player.getVideoStats?.() ?? {};
+    const quality = player.getPlaybackQuality?.() ?? '?';
+    const levels = player.getAvailableQualityLevels?.() ?? [];
+    const qualityData = player.getAvailableQualityData?.() ?? [];
+    const itag = stats.fmt;
+    const itagInfo = ITAG_DB[itag];
+    const config = getConfig();
+
+    const premiumEntries = qualityData.filter((q) => q.paygatedQualityDetails);
+
+    let msg = '── Current Playback ──\n';
+    msg += `Quality: ${quality}\n`;
+    msg += `Format ID (itag): ${itag ?? '?'}`;
+    if (itagInfo) {
+      msg += ` → ${itagInfo.codec} ${itagInfo.res ?? ''}`;
+      if (itagInfo.fps) msg += ` ${itagInfo.fps}fps`;
+      if (itagInfo.hdr) msg += ' HDR';
+      if (itagInfo.premium) msg += ' [PREMIUM]';
+      if (itagInfo.note) msg += ` (${itagInfo.note})`;
+    }
+    msg += `\nOptimal format: ${stats.optimal_format ?? '?'}`;
+    msg += `\nResolution: ${stats.vw ?? '?'}x${stats.vh ?? '?'}`;
+    msg += `\nBandwidth: ${stats.lbw ? (parseInt(stats.lbw) / 1e6).toFixed(1) + ' Mbps' : '?'}`;
+
+    msg += '\n\n── Available Qualities ──\n';
+    for (const qd of qualityData) {
+      const fmtInfo = ITAG_DB[qd.formatId];
+      let line = `${qd.qualityLabel} (${qd.quality})`;
+      if (qd.formatId) {
+        line += ` — itag ${qd.formatId}`;
+        if (fmtInfo) line += ` [${fmtInfo.codec}]`;
+      }
+      if (qd.paygatedQualityDetails) {
+        line += ` ★ ${qd.paygatedQualityDetails.paygatedIndicatorText}`;
+      }
+      msg += line + '\n';
+    }
+
+    if (premiumEntries.length) {
+      msg += '\n── Premium Formats ──\n';
+      for (const pe of premiumEntries) {
+        const info = ITAG_DB[pe.formatId];
+        msg += `itag ${pe.formatId}: ${pe.qualityLabel}`;
+        if (info) msg += ` — ${info.codec}`;
+        msg += ` (${pe.paygatedQualityDetails.paygatedIndicatorText})\n`;
+      }
+    }
+
+    msg += '\n── Settings ──\n';
+    msg += `Preferred quality: ${config.quality}\n`;
+    msg += `Theatre mode: ${config.theatre ? 'ON' : 'OFF'}\n`;
+    msg += `Prefer Premium: ${config.preferPremium ? 'ON' : 'OFF'}\n`;
+
+    alert(msg);
+  });
+
   // ── Core logic ───────────────────────────────────────────────────
   let activeInterval = null;
 
@@ -76,15 +236,18 @@
     return availableLevels[availableLevels.length - 2]; // skip 'auto'
   }
 
-  function getPremiumFormatId(player, quality) {
+  function getFormatId(player, quality) {
     if (!player.getAvailableQualityData) return undefined;
+    const config = getConfig();
     const qualityData = player.getAvailableQualityData();
-    // For "max", pick the first entry (highest); otherwise match the quality key.
-    // Prefer Premium (enhanced bitrate) variants when multiple entries share
-    // the same quality key.
     const matches = qualityData.filter((q) => q.quality === quality);
-    const premium = matches.find((q) => q.paygatedQualityDetails);
-    if (premium) return premium.formatId;
+
+    if (config.preferPremium) {
+      // Prefer Premium (enhanced bitrate) variant: itag 356 (VP9) or 721 (AV1)
+      const premium = matches.find((q) => q.paygatedQualityDetails);
+      if (premium) return premium.formatId;
+    }
+
     return matches[0]?.formatId;
   }
 
@@ -100,7 +263,7 @@
 
     if (!current || current === 'unknown') return false;
 
-    const formatId = getPremiumFormatId(player, target);
+    const formatId = getFormatId(player, target);
 
     if (player.setPlaybackQualityRange) {
       if (formatId) {
@@ -113,9 +276,6 @@
       player.setPlaybackQuality(target);
     }
 
-    // For Premium formats, we can't check by quality string alone since
-    // both regular and Premium report the same quality key. Use stats
-    // to verify when a formatId was requested.
     if (formatId && player.getVideoStats) {
       const stats = player.getVideoStats();
       return stats.fmt === formatId;
