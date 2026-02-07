@@ -6,7 +6,20 @@ on:
     branches: [master]
 
 jobs:
-  build-and-test:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build
+      - name: Run validation tests
+        run: npx playwright test tests/build.spec.js tests/manifest.spec.js tests/core.spec.js tests/package.spec.js tests/consistency.spec.js
+
+  e2e:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,8 +30,8 @@ jobs:
       - run: npx playwright install chromium
       - run: npx playwright install-deps
       - run: npm run build
-      - name: Run tests
-        run: xvfb-run npm test
+      - name: Run E2E tests
+        run: xvfb-run npx playwright test tests/extension.spec.js
       - uses: actions/upload-artifact@v4
         if: always()
         with:
