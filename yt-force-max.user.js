@@ -3,6 +3,7 @@
 // @namespace    https://github.com/yowmamasita
 // @version      2.0
 // @description  Forces preferred quality (including Premium enhanced bitrate) and theatre mode on every YouTube video
+// @author       Ben Adrian Sarmiento
 // @match        *://www.youtube.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -118,6 +119,166 @@
   };
   const QUALITY_KEYS = Object.keys(QUALITY_LABELS);
 
+  function createYTForceMax(getSettings) {
+    let activeInterval = null;
+
+    function getTargetQuality(availableLevels) {
+      const preferred = getSettings().quality;
+      if (preferred === 'max') return availableLevels[0];
+
+      const prefIndex = QUALITY_KEYS.indexOf(preferred);
+      for (let i = prefIndex; i < QUALITY_KEYS.length; i++) {
+        const level = QUALITY_KEYS[i];
+        if (level !== 'max' && availableLevels.includes(level)) return level;
+      }
+      return availableLevels[availableLevels.length - 2]; // skip 'auto'
+    }
+
+    function getFormatId(player, quality) {
+      if (!player.getAvailableQualityData) return undefined;
+      const config = getSettings();
+      const qualityData = player.getAvailableQualityData();
+      const matches = qualityData.filter((q) => q.quality === quality);
+
+      if (config.preferPremium) {
+        const premium = matches.find((q) => q.paygatedQualityDetails);
+        if (premium) return premium.formatId;
+      }
+
+      return matches[0]?.formatId;
+    }
+
+    function forceQuality() {
+      const player = document.getElementById('movie_player');
+      if (!player || !player.getAvailableQualityLevels) return false;
+
+      const levels = player.getAvailableQualityLevels();
+      if (!levels.length || levels[0] === 'auto') return false;
+
+      const target = getTargetQuality(levels);
+      const current = player.getPlaybackQuality();
+
+      if (!current || current === 'unknown') return false;
+
+      const formatId = getFormatId(player, target);
+
+      if (player.setPlaybackQualityRange) {
+        if (formatId) {
+          player.setPlaybackQualityRange(target, target, formatId);
+        } else {
+          player.setPlaybackQualityRange(target, target);
+        }
+      }
+      if (player.setPlaybackQuality) {
+        player.setPlaybackQuality(target);
+      }
+
+      if (formatId && player.getVideoStats) {
+        const stats = player.getVideoStats();
+        return stats.fmt === formatId;
+      }
+      return current === target;
+    }
+
+    function forceTheatreMode() {
+      if (!getSettings().theatre) return true;
+
+      const page = document.querySelector('ytd-watch-flexy');
+      if (!page) return false;
+      if (page.hasAttribute('theater')) return true;
+
+      const theatreBtn = document.querySelector('.ytp-size-button');
+      if (theatreBtn) {
+        theatreBtn.click();
+        return true;
+      }
+      return false;
+    }
+
+    function isWatchPage() {
+      return window.location.pathname === '/watch';
+    }
+
+    function applyWithRetries() {
+      if (activeInterval) clearInterval(activeInterval);
+
+      let attempts = 0;
+      let qualityDone = false;
+      let theatreDone = false;
+
+      activeInterval = setInterval(() => {
+        if (!isWatchPage()) {
+          clearInterval(activeInterval);
+          activeInterval = null;
+          return;
+        }
+
+        if (!qualityDone) qualityDone = forceQuality();
+        if (!theatreDone) theatreDone = forceTheatreMode();
+
+        attempts++;
+        if ((qualityDone && theatreDone) || attempts > 60) {
+          clearInterval(activeInterval);
+          activeInterval = null;
+        }
+      }, 500);
+    }
+
+    function hookPlayerEvents() {
+      const player = document.getElementById('movie_player');
+      if (!player || player.__yt_force_hooked) return;
+      player.__yt_force_hooked = true;
+
+      player.addEventListener('onStateChange', (state) => {
+        if (state === 1 || state === 3) {
+          forceQuality();
+        }
+      });
+    }
+
+    function getPlaybackInfo() {
+      const player = document.getElementById('movie_player');
+      if (!player) return { error: 'No player found' };
+
+      const stats = player.getVideoStats?.() ?? {};
+      const quality = player.getPlaybackQuality?.() ?? '?';
+      const qualityData = player.getAvailableQualityData?.() ?? [];
+      const itag = stats.fmt;
+      const itagInfo = ITAG_DB[itag];
+
+      return {
+        quality,
+        itag,
+        itagInfo,
+        resolution: `${stats.vw ?? '?'}x${stats.vh ?? '?'}`,
+        bandwidth: stats.lbw ? (parseInt(stats.lbw) / 1e6).toFixed(1) + ' Mbps' : '?',
+        optimalFormat: stats.optimal_format ?? '?',
+        qualityData: qualityData.map((q) => ({
+          quality: q.quality,
+          qualityLabel: q.qualityLabel,
+          formatId: q.formatId,
+          codec: ITAG_DB[q.formatId]?.codec,
+          premium: !!q.paygatedQualityDetails,
+          premiumText: q.paygatedQualityDetails?.paygatedIndicatorText,
+        })),
+        settings: getSettings(),
+      };
+    }
+
+    return {
+      applyWithRetries,
+      hookPlayerEvents,
+      isWatchPage,
+      forceQuality,
+      forceTheatreMode,
+      getPlaybackInfo,
+      ITAG_DB,
+      QUALITY_LABELS,
+      QUALITY_KEYS,
+    };
+  }
+
+
   function getConfig() {
     return {
       quality: GM_getValue('quality', 'max'),
@@ -126,21 +287,23 @@
     };
   }
 
+  const engine = createYTForceMax(getConfig);
+
   // ── Menu commands ────────────────────────────────────────────────
   GM_registerMenuCommand('Set preferred quality', () => {
     const current = GM_getValue('quality', 'max');
-    const options = QUALITY_KEYS.map(
-      (k) => `${k === current ? '► ' : '  '}${k} — ${QUALITY_LABELS[k]}`
+    const options = engine.QUALITY_KEYS.map(
+      (k) => `${k === current ? '► ' : '  '}${k} — ${engine.QUALITY_LABELS[k]}`
     ).join('\n');
     const input = prompt(
       `Current quality: ${current}\n\nEnter a quality level:\n${options}`,
       current
     );
-    if (input !== null && QUALITY_KEYS.includes(input.trim())) {
+    if (input !== null && engine.QUALITY_KEYS.includes(input.trim())) {
       GM_setValue('quality', input.trim());
       alert(`Quality set to: ${input.trim()}`);
     } else if (input !== null) {
-      alert(`Invalid quality "${input}". Valid options: ${QUALITY_KEYS.join(', ')}`);
+      alert(`Invalid quality "${input}". Valid options: ${engine.QUALITY_KEYS.join(', ')}`);
     }
   });
 
@@ -162,22 +325,15 @@
   });
 
   GM_registerMenuCommand('Show current playback info', () => {
-    const player = document.getElementById('movie_player');
-    if (!player) { alert('No player found.'); return; }
+    const info = engine.getPlaybackInfo();
+    if (info.error) { alert(info.error); return; }
 
-    const stats = player.getVideoStats?.() ?? {};
-    const quality = player.getPlaybackQuality?.() ?? '?';
-    const levels = player.getAvailableQualityLevels?.() ?? [];
-    const qualityData = player.getAvailableQualityData?.() ?? [];
-    const itag = stats.fmt;
-    const itagInfo = ITAG_DB[itag];
+    const itagInfo = info.itagInfo;
     const config = getConfig();
 
-    const premiumEntries = qualityData.filter((q) => q.paygatedQualityDetails);
-
     let msg = '── Current Playback ──\n';
-    msg += `Quality: ${quality}\n`;
-    msg += `Format ID (itag): ${itag ?? '?'}`;
+    msg += `Quality: ${info.quality}\n`;
+    msg += `Format ID (itag): ${info.itag ?? '?'}`;
     if (itagInfo) {
       msg += ` → ${itagInfo.codec} ${itagInfo.res ?? ''}`;
       if (itagInfo.fps) msg += ` ${itagInfo.fps}fps`;
@@ -185,31 +341,30 @@
       if (itagInfo.premium) msg += ' [PREMIUM]';
       if (itagInfo.note) msg += ` (${itagInfo.note})`;
     }
-    msg += `\nOptimal format: ${stats.optimal_format ?? '?'}`;
-    msg += `\nResolution: ${stats.vw ?? '?'}x${stats.vh ?? '?'}`;
-    msg += `\nBandwidth: ${stats.lbw ? (parseInt(stats.lbw) / 1e6).toFixed(1) + ' Mbps' : '?'}`;
+    msg += `\nOptimal format: ${info.optimalFormat}`;
+    msg += `\nResolution: ${info.resolution}`;
+    msg += `\nBandwidth: ${info.bandwidth}`;
 
     msg += '\n\n── Available Qualities ──\n';
-    for (const qd of qualityData) {
-      const fmtInfo = ITAG_DB[qd.formatId];
-      let line = `${qd.qualityLabel} (${qd.quality})`;
-      if (qd.formatId) {
-        line += ` — itag ${qd.formatId}`;
-        if (fmtInfo) line += ` [${fmtInfo.codec}]`;
+    for (const q of info.qualityData) {
+      let line = `${q.qualityLabel} (${q.quality})`;
+      if (q.formatId) {
+        line += ` — itag ${q.formatId}`;
+        if (q.codec) line += ` [${q.codec}]`;
       }
-      if (qd.paygatedQualityDetails) {
-        line += ` ★ ${qd.paygatedQualityDetails.paygatedIndicatorText}`;
+      if (q.premium) {
+        line += ` ★ ${q.premiumText}`;
       }
       msg += line + '\n';
     }
 
+    const premiumEntries = info.qualityData.filter((q) => q.premium);
     if (premiumEntries.length) {
       msg += '\n── Premium Formats ──\n';
       for (const pe of premiumEntries) {
-        const info = ITAG_DB[pe.formatId];
         msg += `itag ${pe.formatId}: ${pe.qualityLabel}`;
-        if (info) msg += ` — ${info.codec}`;
-        msg += ` (${pe.paygatedQualityDetails.paygatedIndicatorText})\n`;
+        if (pe.codec) msg += ` — ${pe.codec}`;
+        msg += ` (${pe.premiumText})\n`;
       }
     }
 
@@ -221,138 +376,20 @@
     alert(msg);
   });
 
-  // ── Core logic ───────────────────────────────────────────────────
-  let activeInterval = null;
-
-  function getTargetQuality(availableLevels) {
-    const preferred = getConfig().quality;
-    if (preferred === 'max') return availableLevels[0];
-
-    const prefIndex = QUALITY_KEYS.indexOf(preferred);
-    for (let i = prefIndex; i < QUALITY_KEYS.length; i++) {
-      const level = QUALITY_KEYS[i];
-      if (level !== 'max' && availableLevels.includes(level)) return level;
-    }
-    return availableLevels[availableLevels.length - 2]; // skip 'auto'
-  }
-
-  function getFormatId(player, quality) {
-    if (!player.getAvailableQualityData) return undefined;
-    const config = getConfig();
-    const qualityData = player.getAvailableQualityData();
-    const matches = qualityData.filter((q) => q.quality === quality);
-
-    if (config.preferPremium) {
-      // Prefer Premium (enhanced bitrate) variant: itag 356 (VP9) or 721 (AV1)
-      const premium = matches.find((q) => q.paygatedQualityDetails);
-      if (premium) return premium.formatId;
-    }
-
-    return matches[0]?.formatId;
-  }
-
-  function forceQuality() {
-    const player = document.getElementById('movie_player');
-    if (!player || !player.getAvailableQualityLevels) return false;
-
-    const levels = player.getAvailableQualityLevels();
-    if (!levels.length || levels[0] === 'auto') return false;
-
-    const target = getTargetQuality(levels);
-    const current = player.getPlaybackQuality();
-
-    if (!current || current === 'unknown') return false;
-
-    const formatId = getFormatId(player, target);
-
-    if (player.setPlaybackQualityRange) {
-      if (formatId) {
-        player.setPlaybackQualityRange(target, target, formatId);
-      } else {
-        player.setPlaybackQualityRange(target, target);
-      }
-    }
-    if (player.setPlaybackQuality) {
-      player.setPlaybackQuality(target);
-    }
-
-    if (formatId && player.getVideoStats) {
-      const stats = player.getVideoStats();
-      return stats.fmt === formatId;
-    }
-    return current === target;
-  }
-
-  function forceTheatreMode() {
-    if (!getConfig().theatre) return true;
-
-    const page = document.querySelector('ytd-watch-flexy');
-    if (!page) return false;
-    if (page.hasAttribute('theater')) return true;
-
-    const theatreBtn = document.querySelector('.ytp-size-button');
-    if (theatreBtn) {
-      theatreBtn.click();
-      return true;
-    }
-    return false;
-  }
-
-  function isWatchPage() {
-    return window.location.pathname === '/watch';
-  }
-
-  function applyWithRetries() {
-    if (activeInterval) clearInterval(activeInterval);
-
-    let attempts = 0;
-    let qualityDone = false;
-    let theatreDone = false;
-
-    activeInterval = setInterval(() => {
-      if (!isWatchPage()) {
-        clearInterval(activeInterval);
-        activeInterval = null;
-        return;
-      }
-
-      if (!qualityDone) qualityDone = forceQuality();
-      if (!theatreDone) theatreDone = forceTheatreMode();
-
-      attempts++;
-      if ((qualityDone && theatreDone) || attempts > 60) {
-        clearInterval(activeInterval);
-        activeInterval = null;
-      }
-    }, 500);
-  }
-
-  function hookPlayerEvents() {
-    const player = document.getElementById('movie_player');
-    if (!player || player.__yt_force_hooked) return;
-    player.__yt_force_hooked = true;
-
-    player.addEventListener('onStateChange', (state) => {
-      if (state === 1 || state === 3) {
-        forceQuality();
-      }
-    });
-  }
-
   // ── Initialization ───────────────────────────────────────────────
-  applyWithRetries();
+  engine.applyWithRetries();
 
   document.addEventListener('yt-navigate-finish', () => {
-    if (isWatchPage()) {
-      applyWithRetries();
-      hookPlayerEvents();
+    if (engine.isWatchPage()) {
+      engine.applyWithRetries();
+      engine.hookPlayerEvents();
     }
   });
 
   document.addEventListener('yt-page-data-updated', () => {
-    if (isWatchPage()) {
-      applyWithRetries();
-      hookPlayerEvents();
+    if (engine.isWatchPage()) {
+      engine.applyWithRetries();
+      engine.hookPlayerEvents();
     }
   });
 })();

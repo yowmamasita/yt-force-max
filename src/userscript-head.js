@@ -3,6 +3,7 @@
 // @namespace    https://github.com/yowmamasita
 // @version      2.0
 // @description  Forces preferred quality (including Premium enhanced bitrate) and theatre mode on every YouTube video
+// @author       Ben Adrian Sarmiento
 // @match        *://www.youtube.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
