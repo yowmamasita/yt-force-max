@@ -9,6 +9,7 @@ const COOKIES_PATH = path.resolve(
   process.env.HOME || '/home/ben',
   'Downloads/www.youtube.com_cookies.txt'
 );
+const isCI = !!process.env.CI;
 
 // ── 4K test video (public, known 4K): Big Buck Bunny ──
 const VIDEO_4K = 'https://www.youtube.com/watch?v=aqz-KE-bpKQ';
@@ -42,7 +43,6 @@ function parseNetscapeCookies(filePath) {
  * Launch Chrome with the extension loaded
  */
 async function launchWithExtension(options = {}) {
-  const isCI = !!process.env.CI;
   const context = await chromium.launchPersistentContext('', {
     headless: false,
     args: [
@@ -205,10 +205,10 @@ async function dismissConsent(page) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Tests
+// Extension loading & popup tests (work in CI)
 // ════════════════════════════════════════════════════════════════════
 
-test.describe('YouTube Force Max Quality Extension', () => {
+test.describe('Extension loading and popup', () => {
   /** @type {import('@playwright/test').BrowserContext} */
   let context;
   let extensionId;
@@ -223,67 +223,12 @@ test.describe('YouTube Force Max Quality Extension', () => {
     await context?.close();
   });
 
-  test('forces max quality on 4K video', async () => {
-    const page = await context.newPage();
-
-    await page.goto(VIDEO_4K, { waitUntil: 'load', timeout: 30_000 });
-    await saveScreenshot(page, '01-after-load');
-    console.log(`Page URL: ${page.url()}`);
-    console.log(`Page title: ${await page.title()}`);
-    await dismissConsent(page);
-    await page.waitForTimeout(5000);
-    await saveScreenshot(page, '02-after-5s-wait');
-    console.log(`Page URL after wait: ${page.url()}`);
-    await waitForPlayer(page);
-
-    // Wait for extension to apply quality (retry loop)
-    await page.waitForFunction(
-      () => {
-        const p = document.getElementById('movie_player');
-        const q = p?.getPlaybackQuality?.();
-        // Should be hd2160 or hd1440 (highest available)
-        return q && (q === 'hd2160' || q === 'hd1440');
-      },
-      { timeout: 30_000 }
-    );
-
-    const quality = await getQuality(page);
-    const levels = await getAvailableLevels(page);
-    console.log(`Quality: ${quality}, Available: ${levels.join(', ')}`);
-
-    // The quality should be the highest available (first in the list, excluding 'auto')
-    const expected = levels.filter((l) => l !== 'auto')[0];
-    expect(quality).toBe(expected);
-
-    await page.close();
+  test('extension loads and has an ID', async () => {
+    expect(extensionId).toBeTruthy();
+    console.log(`Extension ID: ${extensionId}`);
   });
 
-  test('activates theatre mode', async () => {
-    const page = await context.newPage();
-
-    await page.goto(VIDEO_4K, { waitUntil: 'domcontentloaded' });
-    await dismissConsent(page);
-    await waitForPlayer(page);
-
-    // Wait for theatre mode to be applied
-    await page.waitForFunction(
-      () => {
-        const flexy = document.querySelector('ytd-watch-flexy');
-        return flexy?.hasAttribute('theater');
-      },
-      { timeout: 30_000 }
-    );
-
-    const isTheatre = await page.evaluate(() => {
-      return document.querySelector('ytd-watch-flexy')?.hasAttribute('theater') ?? false;
-    });
-    expect(isTheatre).toBe(true);
-
-    await page.close();
-  });
-
-  test('popup settings persist and update player', async () => {
-    // Open popup
+  test('popup renders and settings persist', async () => {
     const popupUrl = extensionId
       ? `chrome-extension://${extensionId}/popup/popup.html`
       : null;
@@ -292,6 +237,10 @@ test.describe('YouTube Force Max Quality Extension', () => {
 
     const popupPage = await context.newPage();
     await popupPage.goto(popupUrl);
+
+    // Verify popup elements exist
+    await expect(popupPage.locator('#quality')).toBeVisible();
+    await expect(popupPage.locator('#theatre')).toBeVisible();
 
     // Change quality to 720p
     await popupPage.selectOption('#quality', 'hd720');
@@ -318,6 +267,125 @@ test.describe('YouTube Force Max Quality Extension', () => {
 
     await popupPage.close();
 
+    // Verify settings persist across popup reopens
+    const popupPage2 = await context.newPage();
+    await popupPage2.goto(popupUrl);
+
+    const qualityValue = await popupPage2.locator('#quality').inputValue();
+    expect(qualityValue).toBe('hd720');
+
+    await popupPage2.close();
+
+    // Reset settings back to defaults
+    const resetPage = await context.newPage();
+    await resetPage.goto(popupUrl);
+    await resetPage.selectOption('#quality', 'max');
+    const theatreReset = resetPage.locator('#theatre');
+    if (!(await theatreReset.isChecked())) {
+      await theatreReset.click();
+    }
+    await resetPage.close();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// YouTube playback tests (require real YouTube — skipped in CI)
+// YouTube blocks video playback from datacenter IPs with
+// "Sign in to confirm you're not a bot", so these only run locally.
+// ════════════════════════════════════════════════════════════════════
+
+test.describe('YouTube playback', () => {
+  /** @type {import('@playwright/test').BrowserContext} */
+  let context;
+  let extensionId;
+
+  test.beforeAll(async () => {
+    test.skip(isCI, 'YouTube blocks playback from CI datacenter IPs');
+    const result = await launchWithExtension();
+    context = result.context;
+    extensionId = result.extensionId;
+  });
+
+  test.afterAll(async () => {
+    await context?.close();
+  });
+
+  test('forces max quality on 4K video', async () => {
+    test.skip(isCI, 'YouTube blocks playback from CI datacenter IPs');
+    const page = await context.newPage();
+
+    await page.goto(VIDEO_4K, { waitUntil: 'domcontentloaded' });
+    await dismissConsent(page);
+    await waitForPlayer(page);
+
+    // Wait for extension to apply quality (retry loop)
+    await page.waitForFunction(
+      () => {
+        const p = document.getElementById('movie_player');
+        const q = p?.getPlaybackQuality?.();
+        // Should be hd2160 or hd1440 (highest available)
+        return q && (q === 'hd2160' || q === 'hd1440');
+      },
+      { timeout: 30_000 }
+    );
+
+    const quality = await getQuality(page);
+    const levels = await getAvailableLevels(page);
+    console.log(`Quality: ${quality}, Available: ${levels.join(', ')}`);
+
+    // The quality should be the highest available (first in the list, excluding 'auto')
+    const expected = levels.filter((l) => l !== 'auto')[0];
+    expect(quality).toBe(expected);
+
+    await page.close();
+  });
+
+  test('activates theatre mode', async () => {
+    test.skip(isCI, 'YouTube blocks playback from CI datacenter IPs');
+    const page = await context.newPage();
+
+    await page.goto(VIDEO_4K, { waitUntil: 'domcontentloaded' });
+    await dismissConsent(page);
+    await waitForPlayer(page);
+
+    // Wait for theatre mode to be applied
+    await page.waitForFunction(
+      () => {
+        const flexy = document.querySelector('ytd-watch-flexy');
+        return flexy?.hasAttribute('theater');
+      },
+      { timeout: 30_000 }
+    );
+
+    const isTheatre = await page.evaluate(() => {
+      return document.querySelector('ytd-watch-flexy')?.hasAttribute('theater') ?? false;
+    });
+    expect(isTheatre).toBe(true);
+
+    await page.close();
+  });
+
+  test('popup settings update player quality', async () => {
+    test.skip(isCI, 'YouTube blocks playback from CI datacenter IPs');
+    // Open popup
+    const popupUrl = extensionId
+      ? `chrome-extension://${extensionId}/popup/popup.html`
+      : null;
+
+    test.skip(!popupUrl, 'Could not determine extension ID');
+
+    const popupPage = await context.newPage();
+    await popupPage.goto(popupUrl);
+
+    // Change quality to 720p
+    await popupPage.selectOption('#quality', 'hd720');
+    // Disable theatre mode
+    const theatreCheckbox = popupPage.locator('#theatre');
+    if (await theatreCheckbox.isChecked()) {
+      await theatreCheckbox.click();
+    }
+    await popupPage.close();
+
     // Now open a video and verify 720p is applied
     const page = await context.newPage();
     await page.goto(VIDEO_4K, { waitUntil: 'domcontentloaded' });
@@ -334,12 +402,6 @@ test.describe('YouTube Force Max Quality Extension', () => {
     );
 
     expect(await getQuality(page)).toBe('hd720');
-
-    // Note: We can't reliably assert theatre mode is off because YouTube
-    // itself persists the theatre state. What we verify is that our extension
-    // did NOT force it on (the setting was disabled). YouTube may still have
-    // it on from the previous test where we clicked the button.
-
     await page.close();
 
     // Reset settings back to defaults
@@ -354,6 +416,7 @@ test.describe('YouTube Force Max Quality Extension', () => {
   });
 
   test('handles SPA navigation', async () => {
+    test.skip(isCI, 'YouTube blocks playback from CI datacenter IPs');
     const page = await context.newPage();
 
     // Start on a video
