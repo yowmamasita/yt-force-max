@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>YT Force Max</h1>
+
+    <div class="setting">
+      <label for="quality">Preferred Quality</label>
+      <select id="quality">
+        <option value="max">Max (highest available)</option>
+        <option value="hd2160">2160p (4K)</option>
+        <option value="hd1440">1440p</option>
+        <option value="hd1080">1080p</option>
+        <option value="hd720">720p</option>
+        <option value="large">480p</option>
+        <option value="medium">360p</option>
+        <option value="small">240p</option>
+        <option value="tiny">144p</option>
+      </select>
+    </div>
+
+    <div class="setting">
+      <label class="toggle">
+        <input type="checkbox" id="theatre">
+        <span>Theatre mode</span>
+      </label>
+    </div>
+
+    <div class="setting">
+      <label class="toggle">
+        <input type="checkbox" id="preferPremium">
+        <span>Premium enhanced bitrate</span>
+      </label>
+    </div>
+
+    <button id="info-btn">Show Playback Info</button>
+    <pre id="info-output" class="hidden"></pre>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

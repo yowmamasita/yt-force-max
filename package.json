@@ -1,0 +1,25 @@
+{
+  "name": "yt-force-max",
+  "version": "1.0.0",
+  "description": "",
+  "main": "yt-force-max.user.js",
+  "scripts": {
+    "build": "node build.js",
+    "test": "npx playwright test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yowmamasita/yt-force-max.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/yowmamasita/yt-force-max/issues"
+  },
+  "homepage": "https://github.com/yowmamasita/yt-force-max#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

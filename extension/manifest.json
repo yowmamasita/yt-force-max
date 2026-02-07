@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Force Max Quality",
+  "version": "1.0.0",
+  "description": "Forces preferred quality (including Premium enhanced bitrate) and theatre mode on every YouTube video",
+  "permissions": ["storage"],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*"],
+      "js": ["src/content-script.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://www.youtube.com/*"],
+      "js": ["src/page-script.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "yt-force-max@example.com",
+      "strict_min_version": "128.0"
+    }
+  }
+}
