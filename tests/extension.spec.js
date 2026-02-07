@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 
 const EXTENSION_PATH = path.resolve(__dirname, '..', 'extension');
+const SCREENSHOTS_DIR = path.resolve(__dirname, '..', 'test-results');
 const COOKIES_PATH = path.resolve(
   process.env.HOME || '/home/ben',
   'Downloads/www.youtube.com_cookies.txt'
@@ -92,18 +93,38 @@ async function launchWithExtension(options = {}) {
 }
 
 /**
+ * Save a debug screenshot
+ */
+async function saveScreenshot(page, name) {
+  try {
+    fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+    await page.screenshot({
+      path: path.join(SCREENSHOTS_DIR, `${name}.png`),
+      fullPage: true,
+    });
+  } catch {
+    // Ignore screenshot errors
+  }
+}
+
+/**
  * Wait for YouTube player to be ready on a page
  */
 async function waitForPlayer(page, timeout = 20_000) {
-  await page.waitForFunction(
-    () => {
-      const p = document.getElementById('movie_player');
-      if (!p) return false;
-      const levels = p.getAvailableQualityLevels?.();
-      return levels && levels.length > 0 && levels[0] !== 'auto';
-    },
-    { timeout }
-  );
+  try {
+    await page.waitForFunction(
+      () => {
+        const p = document.getElementById('movie_player');
+        if (!p) return false;
+        const levels = p.getAvailableQualityLevels?.();
+        return levels && levels.length > 0 && levels[0] !== 'auto';
+      },
+      { timeout }
+    );
+  } catch (e) {
+    await saveScreenshot(page, `waitForPlayer-fail-${Date.now()}`);
+    throw e;
+  }
 }
 
 /**
@@ -178,6 +199,7 @@ test.describe('YouTube Force Max Quality Extension', () => {
 
     await page.goto(VIDEO_4K, { waitUntil: 'domcontentloaded' });
     await dismissConsent(page);
+    await saveScreenshot(page, 'after-goto-4k');
     await waitForPlayer(page);
 
     // Wait for extension to apply quality (retry loop)
