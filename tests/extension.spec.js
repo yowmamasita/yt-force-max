@@ -50,6 +50,7 @@ async function launchWithExtension(options = {}) {
       `--load-extension=${EXTENSION_PATH}`,
       '--no-first-run',
       '--disable-gpu',
+      '--autoplay-policy=no-user-gesture-required',
       ...(isCI ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-setuid-sandbox'] : []),
     ],
     viewport: { width: 1920, height: 1080 },
@@ -108,9 +109,37 @@ async function saveScreenshot(page, name) {
 }
 
 /**
+ * Try to start playback if the player is paused/unstarted
+ */
+async function ensurePlayback(page) {
+  try {
+    // Click the big play button if visible
+    const bigPlayBtn = page.locator('.ytp-large-play-button');
+    if (await bigPlayBtn.isVisible({ timeout: 2000 })) {
+      await bigPlayBtn.click();
+    }
+  } catch {
+    // Ignore
+  }
+  try {
+    // Also try to start via the player API
+    await page.evaluate(() => {
+      const p = document.getElementById('movie_player');
+      p?.playVideo?.();
+    });
+  } catch {
+    // Ignore
+  }
+}
+
+/**
  * Wait for YouTube player to be ready on a page
  */
 async function waitForPlayer(page, timeout = 20_000) {
+  // First wait for the player element to exist
+  await page.waitForSelector('#movie_player', { timeout });
+  // Try to kick off playback
+  await ensurePlayback(page);
   try {
     await page.waitForFunction(
       () => {
