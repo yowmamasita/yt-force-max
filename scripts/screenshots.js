@@ -16,7 +16,7 @@ async function main() {
       '--no-first-run',
       '--disable-gpu',
     ],
-    viewport: { width: 640, height: 400 },
+    viewport: { width: 1920, height: 1080 },
   });
 
   // Screenshot 1: Popup rendered in a standalone page
@@ -91,16 +91,81 @@ async function main() {
   console.log('Saved screenshot-popup.png');
   await popupPage.close();
 
-  // Screenshot 2: YouTube with extension loaded
+  // Screenshot 2: YouTube video page with extension active
   const ytPage = await context.newPage();
-  await ytPage.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  // Use Big Buck Bunny — public 4K video, no age gate
+  await ytPage.goto('https://www.youtube.com/watch?v=aqz-KE-bpKQ', { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+  // Dismiss any consent/cookie dialogs
+  for (const label of ['Accept all', 'Reject all', 'No thanks', 'Dismiss', 'Not now']) {
+    try {
+      await ytPage.locator(`button:has-text("${label}")`).first().click({ timeout: 2000 });
+      await ytPage.waitForTimeout(1000);
+    } catch {}
+  }
+
+  // Wait for video player to load
+  await ytPage.waitForSelector('#movie_player', { timeout: 15000 }).catch(() => {});
+  await ytPage.waitForTimeout(5000);
+
+  // Click play if paused
   try {
-    const consentBtn = ytPage.locator('button:has-text("Accept all"), button:has-text("Reject all")').first();
-    await consentBtn.click({ timeout: 3000 });
+    const paused = await ytPage.evaluate(() => {
+      const player = document.getElementById('movie_player');
+      return player?.classList?.contains('paused-mode');
+    });
+    if (paused) {
+      await ytPage.locator('.ytp-play-button').click({ timeout: 3000 });
+      await ytPage.waitForTimeout(3000);
+    }
   } catch {}
-  await ytPage.waitForTimeout(3000);
-  await ytPage.screenshot({ path: path.join(OUT, 'screenshot-youtube.png') });
-  console.log('Saved screenshot-youtube.png');
+
+  // Wait for quality to settle at max
+  await ytPage.waitForTimeout(5000);
+
+  // Open "Stats for nerds" via right-click context menu on the player
+  await ytPage.evaluate(() => {
+    const player = document.getElementById('movie_player');
+    if (player?.getStatsForNerds) {
+      // Direct API call to show stats overlay
+      player.getStatsForNerds();
+    }
+  });
+
+  // Fallback: try right-click menu approach
+  try {
+    const statsVisible = await ytPage.locator('.html5-video-info-panel').isVisible();
+    if (!statsVisible) {
+      // Right-click the video to get context menu
+      await ytPage.locator('#movie_player video').click({ button: 'right', timeout: 3000 });
+      await ytPage.waitForTimeout(500);
+      // Click "Stats for nerds" in the context menu
+      await ytPage.locator('.ytp-menuitem:has-text("Stats for nerds")').click({ timeout: 3000 });
+    }
+  } catch {}
+
+  await ytPage.waitForTimeout(2000);
+
+  await ytPage.screenshot({ path: path.join(OUT, 'screenshot-youtube-stats.png') });
+  console.log('Saved screenshot-youtube-stats.png');
+
+  // Close stats for nerds
+  await ytPage.evaluate(() => {
+    const closeBtn = document.querySelector('.html5-video-info-panel-close');
+    if (closeBtn) closeBtn.click();
+  });
+  await ytPage.waitForTimeout(500);
+
+  // Screenshot 3: Quality options panel open
+  // Click the settings gear
+  await ytPage.locator('.ytp-settings-button').click({ timeout: 5000 });
+  await ytPage.waitForTimeout(500);
+  // Click "Quality" menu item
+  await ytPage.locator('.ytp-menuitem:has-text("Quality")').click({ timeout: 5000 });
+  await ytPage.waitForTimeout(1000);
+
+  await ytPage.screenshot({ path: path.join(OUT, 'screenshot-youtube-quality.png') });
+  console.log('Saved screenshot-youtube-quality.png');
   await ytPage.close();
 
   await context.close();
